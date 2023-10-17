@@ -1,6 +1,7 @@
 import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt 
+from typing import List, Optional
 
 # tensorflow
 from tensorflow import keras
@@ -19,24 +20,107 @@ class TimeSegment1D(object):
     Args:
         AbstractMLModel (class): base class for ml models 
     """
-    def __init__(self, modelfolder=MODELDATA_FOLDER, modelname = 'ckpt', n=500):
-        """Create 1D encoder CNN model using sequential API from Keras
+    def __init__(self, 
+                 modelfolder=MODELDATA_FOLDER, 
+                 modelname = 'ckpt', 
+                 n=500,
+                 conv_layers: Optional[List[dict]] = None,
+                 convtrans_layers: Optional[List[dict]] = None, 
+                 learning_rate: float = 0.001):
+        """
+        Create 1D encoder CNN model using the sequential API from Keras.
 
         Args:
-            modelfolder (_type_): _description_
-            modelname (str, optional): _description_. Defaults to 'ckpt'.
-            n (int, optional): _description_. Defaults to 500.
+            modelfolder (str): The directory where the model data will be saved.
+            modelname (str, optional): The name of the model. Defaults to 'ckpt'.
+            n (int, optional): The size of the input data. Defaults to 500.
+            conv_layers (List[dict], optional): A list of dictionaries, each containing the configuration
+                                                for a convolutional layer (downscaling). If None, a default configuration is used.
+                                                Each dictionary may contain:
+                                                    - filters (int): the dimensionality of the output space (i.e. the number of output filters in the convolution).
+                                                    - kernel_size (int): specifying the length of the 1D convolution window.
+                                                    - activation (str): the activation function to use.
+                                                    - dropout_rate (float): fraction of the input units to drop.
+            convtrans_layers (List[dict], optional): A list of dictionaries, each containing the configuration
+                                                for a convolutional transpose layer (upscaling). If None, a default configuration is used.
+                                                Each dictionary may contain:
+                                                    - filters (int): the dimensionality of the output space (i.e. the number of output filters in the convolution).
+                                                    - kernel_size (int): specifying the length of the 1D convolution window.
+                                                    - activation (str): the activation function to use.
+                                                    - dropout_rate (float): fraction of the input units to drop.
+            learning_rate (float, optional): The learning rate for the optimizer. Defaults to 0.001.
         """
-        #
+        
+        # Set up the default convolutional layers if none are provided
+        if conv_layers is None:
+            conv_layers = [
+                {'filters': 32, 'kernel_size': 7, 'activation': 'relu', 'dropout_rate': 0.25, 'depth':1},
+                {'filters': 16, 'kernel_size': 7, 'activation': 'relu', 'dropout_rate': 0.25, 'depth':1},
+                # ... other layers ...
+            ]
+
+        if convtrans_layers is None:
+            conv_layers = [
+                {'filters': 16, 'kernel_size': 7, 'activation': 'relu', 'dropout_rate': 0.25, 'depth':1},
+                {'filters': 32, 'kernel_size': 7, 'activation': 'relu', 'dropout_rate': 0.25, 'depth':1},
+                # ... other layers ...
+            ]
+
         model = keras.models.Sequential()
-        model.add(Conv1D(filters= 32, kernel_size=7, activation='relu', input_shape= (n,1), strides=2, padding='same'))
-        model.add(Dropout(0.25))
-        model.add(Conv1D(filters=16, kernel_size=7, activation='relu', strides=2, padding='same'))
-        model.add(Dropout(0.25))
-        model.add(Conv1DTranspose(filters=16, kernel_size=7, activation='relu', strides=2, padding='same'))
-        model.add(Dropout(0.25))
-        model.add(Conv1DTranspose(filters=32, kernel_size=7, activation='relu', strides=2, padding='same'))
-        model.add(Dropout(0.25))
+
+        # Input layer
+        model.add(keras.layers.InputLayer(input_shape=(n, 1)))
+        
+        # Convolutional layers
+        for layer_params in conv_layers:
+            model.add(keras.layers.Conv1D(
+                filters=layer_params['filters'],
+                kernel_size=layer_params['kernel_size'],
+                activation=layer_params['activation'],
+                padding='same',
+                strides=2
+            ))
+            for i in range(0,layer_params['depth']):
+                model.add(keras.layers.Conv1D(
+                filters=layer_params['filters'],
+                kernel_size=layer_params['kernel_size'],
+                activation=layer_params['activation'],
+                padding='same',
+                strides=1
+            ))
+            if 'dropout_rate' in layer_params and layer_params['dropout_rate'] > 0:
+                model.add(keras.layers.Dropout(layer_params['dropout_rate']))
+
+        # Convolutional layers
+        for layer_params in convtrans_layers:
+            model.add(keras.layers.Conv1DTranspose(
+                filters=layer_params['filters'],
+                kernel_size=layer_params['kernel_size'],
+                activation=layer_params['activation'],
+                padding='same',
+                strides=2
+            ))
+            for i in range(0,layer_params['depth']):
+                model.add(keras.layers.Conv1DTranspose(
+                filters=layer_params['filters'],
+                kernel_size=layer_params['kernel_size'],
+                activation=layer_params['activation'],
+                padding='same',
+                strides=1
+            ))
+            if 'dropout_rate' in layer_params and layer_params['dropout_rate'] > 0:
+                model.add(keras.layers.Dropout(layer_params['dropout_rate']))
+        
+
+        # model.add(Conv1D(filters= 32, kernel_size=7, activation='relu', input_shape= (n,1), strides=2, padding='same'))
+        # model.add(Dropout(0.25))
+        # model.add(Conv1D(filters=16, kernel_size=7, activation='relu', strides=2, padding='same'))
+        # model.add(Dropout(0.25))
+        # model.add(Conv1DTranspose(filters=16, kernel_size=7, activation='relu', strides=2, padding='same'))
+        # model.add(Dropout(0.25))
+        # model.add(Conv1DTranspose(filters=32, kernel_size=7, activation='relu', strides=2, padding='same'))
+        # model.add(Dropout(0.25))
+
         model.add(Conv1DTranspose(filters=3, kernel_size=3, activation='softmax',padding='same'))
         model.compile(optimizer=keras.optimizers.legacy.Adam(learning_rate=0.001), loss=keras.losses.CategoricalCrossentropy())
 
