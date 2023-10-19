@@ -1,0 +1,2 @@
+model_checkpoint_path: "mini-unet1D"
+all_model_checkpoint_paths: "mini-unet1D"

@@ -5,14 +5,18 @@ from typing import List, Optional
 
 # tensorflow
 from tensorflow import keras
-from keras.layers import Conv1D, Conv1DTranspose
-from tensorflow.python.keras.layers.core import Dropout
+from keras.layers import Conv1D, Conv1DTranspose, concatenate
+from keras.layers import Input, Dropout
+from keras.models import Model
+import keras.backend as K
+
+#scikit-learn
+from sklearn.metrics import f1_score
 
 # utility functions
 from utils import start_stop, smooth, encode_labels
 
 MODELDATA_FOLDER = Path( __file__ ).parent.absolute() / "modeldata" / "1DCNN"
-
 
 class TimeSegment1D(object):
     """Helper class for 1D CNN model for time series segmentation
@@ -22,49 +26,13 @@ class TimeSegment1D(object):
     """
     def __init__(self, 
                  modelfolder=MODELDATA_FOLDER, 
-                 modelname = 'ckpt', 
+                 modelname = 'unet', 
                  n=500,
-                 conv_layers: Optional[List[dict]] = None,
-                 convtrans_layers: Optional[List[dict]] = None, 
-                 learning_rate: float = 0.001):
-        """
-        Create 1D encoder CNN model using the sequential API from Keras.
-
-        Args:
-            modelfolder (str): The directory where the model data will be saved.
-            modelname (str, optional): The name of the model. Defaults to 'ckpt'.
-            n (int, optional): The size of the input data. Defaults to 500.
-            conv_layers (List[dict], optional): A list of dictionaries, each containing the configuration
-                                                for a convolutional layer (downscaling). If None, a default configuration is used.
-                                                Each dictionary may contain:
-                                                    - filters (int): the dimensionality of the output space (i.e. the number of output filters in the convolution).
-                                                    - kernel_size (int): specifying the length of the 1D convolution window.
-                                                    - activation (str): the activation function to use.
-                                                    - dropout_rate (float): fraction of the input units to drop.
-            convtrans_layers (List[dict], optional): A list of dictionaries, each containing the configuration
-                                                for a convolutional transpose layer (upscaling). If None, a default configuration is used.
-                                                Each dictionary may contain:
-                                                    - filters (int): the dimensionality of the output space (i.e. the number of output filters in the convolution).
-                                                    - kernel_size (int): specifying the length of the 1D convolution window.
-                                                    - activation (str): the activation function to use.
-                                                    - dropout_rate (float): fraction of the input units to drop.
-            learning_rate (float, optional): The learning rate for the optimizer. Defaults to 0.001.
-        """
+                 learning_rate: float = 0.001,
+                 kernel=[9,7,7,9],
+                 filters=[64,32,32,64],
+                 nclasses =3):
         
-        # Set up the default convolutional layers if none are provided
-        if conv_layers is None:
-            conv_layers = [
-                {'filters': 32, 'kernel_size': 7, 'activation': 'relu', 'dropout_rate': 0.25, 'depth':1},
-                {'filters': 16, 'kernel_size': 7, 'activation': 'relu', 'dropout_rate': 0.25, 'depth':1},
-                # ... other layers ...
-            ]
-
-        if convtrans_layers is None:
-            conv_layers = [
-                {'filters': 16, 'kernel_size': 7, 'activation': 'relu', 'dropout_rate': 0.25, 'depth':1},
-                {'filters': 32, 'kernel_size': 7, 'activation': 'relu', 'dropout_rate': 0.25, 'depth':1},
-                # ... other layers ...
-            ]
 
         model = keras.models.Sequential()
 
@@ -72,57 +40,21 @@ class TimeSegment1D(object):
         model.add(keras.layers.InputLayer(input_shape=(n, 1)))
         
         # Convolutional layers
-        for layer_params in conv_layers:
-            model.add(keras.layers.Conv1D(
-                filters=layer_params['filters'],
-                kernel_size=layer_params['kernel_size'],
-                activation=layer_params['activation'],
-                padding='same',
-                strides=2
-            ))
-            for i in range(0,layer_params['depth']):
-                model.add(keras.layers.Conv1D(
-                filters=layer_params['filters'],
-                kernel_size=layer_params['kernel_size'],
-                activation=layer_params['activation'],
-                padding='same',
-                strides=1
-            ))
-            if 'dropout_rate' in layer_params and layer_params['dropout_rate'] > 0:
-                model.add(keras.layers.Dropout(layer_params['dropout_rate']))
+        model.add(Conv1D(filters= filters[0], kernel_size= kernel[0], activation='relu', input_shape= (n,1), strides=2, padding='same'))
+        model.add(Dropout(0.25))
+        model.add(Conv1D(filters= filters[1], kernel_size= kernel[1], activation='relu', strides=2, padding='same'))
+        model.add(Dropout(0.25))
+        model.add(Conv1DTranspose(filters= filters[2], kernel_size= kernel[2], activation='relu', strides=2, padding='same'))
+        model.add(Dropout(0.25))
+        model.add(Conv1DTranspose(filters= filters[3], kernel_size= kernel[3], activation='relu', strides=2, padding='same'))
+        model.add(Dropout(0.25))
 
-        # Convolutional layers
-        for layer_params in convtrans_layers:
-            model.add(keras.layers.Conv1DTranspose(
-                filters=layer_params['filters'],
-                kernel_size=layer_params['kernel_size'],
-                activation=layer_params['activation'],
-                padding='same',
-                strides=2
-            ))
-            for i in range(0,layer_params['depth']):
-                model.add(keras.layers.Conv1DTranspose(
-                filters=layer_params['filters'],
-                kernel_size=layer_params['kernel_size'],
-                activation=layer_params['activation'],
-                padding='same',
-                strides=1
-            ))
-            if 'dropout_rate' in layer_params and layer_params['dropout_rate'] > 0:
-                model.add(keras.layers.Dropout(layer_params['dropout_rate']))
-        
+        model.add(Conv1DTranspose(filters=nclasses, kernel_size=3, activation='softmax',padding='same'))
+        f1_metric = keras.metrics.F1Score(num_classes=nclasses, average='macro', name='f1_metric')  # you can also use 'micro' or 'weighted'
 
-        # model.add(Conv1D(filters= 32, kernel_size=7, activation='relu', input_shape= (n,1), strides=2, padding='same'))
-        # model.add(Dropout(0.25))
-        # model.add(Conv1D(filters=16, kernel_size=7, activation='relu', strides=2, padding='same'))
-        # model.add(Dropout(0.25))
-        # model.add(Conv1DTranspose(filters=16, kernel_size=7, activation='relu', strides=2, padding='same'))
-        # model.add(Dropout(0.25))
-        # model.add(Conv1DTranspose(filters=32, kernel_size=7, activation='relu', strides=2, padding='same'))
-        # model.add(Dropout(0.25))
-
-        model.add(Conv1DTranspose(filters=3, kernel_size=3, activation='softmax',padding='same'))
-        model.compile(optimizer=keras.optimizers.legacy.Adam(learning_rate=0.001), loss=keras.losses.CategoricalCrossentropy())
+        model.compile(optimizer=keras.optimizers.legacy.Adam(learning_rate=learning_rate), 
+                      loss=keras.losses.CategoricalCrossentropy(),
+                      metrics=['accuracy', f1_metric])
 
         self.model = model
         self.input_shape = (n,1)
@@ -192,7 +124,7 @@ class TimeSegment1D(object):
 
         return ret_list,mask
     
-    def train(self, input):
+    def train(self, input, epochs=5):
         """train member function
 
         Args:
@@ -203,15 +135,31 @@ class TimeSegment1D(object):
         self.history = self.model.fit(
             x_train,
             y_train,
-            epochs=5,
-            batch_size=128,
+            epochs=epochs,
+            batch_size=256,
             validation_split=0.2,
             callbacks=[
                 keras.callbacks.EarlyStopping(monitor="val_loss", patience=5, mode="min")
             ],
         )
         self.model.save_weights("%s/%s"%(self.modelfolder, self.modelname))
+        self.load_status = True
     
+    def get_F1_score(self,data):
+        _pred = self.model.predict(data['values'])
+
+        y_true, y_pred = [],[]
+        k,l,m = np.shape(data['labels'])
+        for i in range(0,k):
+            for j in range(0,l):
+                y_true.append(data['labels'][i,j,:].argmax())
+                y_pred.append(_pred[i,j,:].argmax())
+        
+        # Calculate F1 score
+        f1 = f1_score(y_true, y_pred, average=None) 
+        print(f"Class F1 Scores: {f1}")
+        return f1
+
     def get_input_shape(self):
         return self.input_shape
 
@@ -338,7 +286,83 @@ class TimeSegment1D(object):
         lt.connect()
         return lt.labels, lt.skip
 
- 
+    def print_model_summary(self):
+        self.model.summary()
+
+class UNetSegment1D(TimeSegment1D):
+    def __init__(self, modelfolder=MODELDATA_FOLDER, modelname='mini-unet1D', n=512, num_classes=3):
+        """
+        Create 1D U-Net-like model with skip connections
+
+        Args:
+            modelfolder (_type_): _description_
+            modelname (str, optional): _description_. Defaults to 'ckpt'.
+            n (int, optional): _description_. Defaults to 512, must be divisible by 8.
+        """
+        input_layer = Input(shape=(n, 1))
+
+        ### [First half of the network: downsampling inputs] ###
+
+        # Entry block
+        x = keras.layers.Conv1D(32, 3, strides=2, padding="same")(input_layer)
+        x = keras.layers.BatchNormalization()(x)
+        x = keras.layers.Activation("relu")(x)
+
+        previous_block_activation = x  # Set aside residual
+
+        # Blocks 1, 2, 3 are identical apart from the feature depth.
+        for filters in [64, 128, 256]:
+            x = keras.layers.Activation("relu")(x)
+            x = keras.layers.SeparableConv1D(filters, 3, padding="same")(x)
+            x = keras.layers.BatchNormalization()(x)
+
+            x = keras.layers.Activation("relu")(x)
+            x = keras.layers.SeparableConv1D(filters, 3, padding="same")(x)
+            x = keras.layers.BatchNormalization()(x)
+
+            x = keras.layers.MaxPooling1D(3, strides=2, padding="same")(x)
+
+            # Project residual
+            residual = keras.layers.Conv1D(filters, 1, strides=2, padding="same")(
+                previous_block_activation
+            )
+            x = keras.layers.add([x, residual])  # Add back residual
+            previous_block_activation = x  # Set aside next residual
+
+        ### [Second half of the network: upsampling inputs] ###
+
+        for filters in [256, 128, 64, 32]:
+            x = keras.layers.Activation("relu")(x)
+            x = keras.layers.Conv1DTranspose(filters, 3, padding="same")(x)
+            x = keras.layers.BatchNormalization()(x)
+
+            x = keras.layers.Activation("relu")(x)
+            x = keras.layers.Conv1DTranspose(filters, 3, padding="same")(x)
+            x = keras.layers.BatchNormalization()(x)
+
+            x = keras.layers.UpSampling1D(2)(x)
+
+            # Project residual
+            residual = keras.layers.UpSampling1D(2)(previous_block_activation)
+            residual = keras.layers.Conv1D(filters, 1, padding="same")(residual)
+            x = keras.layers.add([x, residual])  # Add back residual
+            previous_block_activation = x  # Set aside next residual
+
+        # Add a per-pixel classification layer
+        output_layer = keras.layers.Conv1D(num_classes, 3, activation="softmax", padding="same")(x)
+
+        # Compile model
+        model = Model(inputs=input_layer, outputs=output_layer)
+        model.compile(optimizer='adam', loss='categorical_crossentropy')
+
+        self.model = model
+        self.input_shape = (n, 1)
+        self.modelname = modelname
+        self.modelfolder = modelfolder
+        self.load_status = False
+        self.history = None
+        self.load_weights()
+
 class LabelTrace:
     """Matplotlib class for class labling of 1D normalized traces
     
@@ -423,3 +447,4 @@ class LabelTrace:
         self.figure.canvas.mpl_disconnect(self.cidpress)
         self.figure.canvas.mpl_disconnect(self.cidrelease)
         self.figure.canvas.mpl_disconnect(self.cidmotion)
+
